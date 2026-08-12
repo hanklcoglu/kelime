@@ -579,65 +579,7 @@ function restoreBackup(){
   home();
 }
 /* öğretmen: öğrencinin ilerleme kodunu okur */
-function analyzeStudent(){
-  const v=document.getElementById('ain').value.trim(); if(!v)return;
-  let d; try{d=b64d(v)}catch(e){alert('Could not read the code.');return;}
-  if(!d||!d.words||!d.deck){alert('This is not a progress code.');return;}
-  const rows=d.deck.map(w=>{const s=d.words[w.w]||{box:0,seen:0,wrong:0};
-    return{w:w.w,tr:w.tr,box:s.box||0,seen:s.seen||0,wrong:s.wrong||0}});
-  const learned=rows.filter(r=>r.box>=4).length;
-  const learning=rows.filter(r=>r.seen>0&&r.box<4).length;
-  const untouched=rows.filter(r=>r.seen===0).length;
-  const weak=rows.filter(r=>r.seen>0).sort((a,b)=>a.box-b.box||b.wrong-a.wrong).slice(0,15);
-  document.getElementById('aout').innerHTML=`
-    <div class="stats"><div class="stat"><b>${learned}</b><span>learned</span></div>
-    <div class="stat"><b>${learning}</b><span>learning</span></div>
-    <div class="stat"><b>${untouched}</b><span>not started</span></div></div>
-    <div class="note">🔥 ${d.streak||0} day streak · ${d.xp||0} XP · last studied: ${esc(d.lastDay||'—')} · backup date: ${esc(d.at||'—')}</div>
-    <div class="sec-title">Review these in the lesson</div>
-    ${weak.length?weak.map(r=>`<div class="witem"><div><div class="w">${esc(r.w)}</div>
-      <div class="t">${esc(r.tr)} · ${r.wrong} wrong / ${r.seen} tries</div></div>
-      <div class="dots">${[1,2,3,4,5].map(i=>`<div class="dot ${r.box>=i?'on':''}"></div>`).join('')}</div></div>`).join('')
-      :'<div class="note">No words studied yet.</div>'}`;
-}
 
-function parseLines(txt){
-  return txt.split('\n').map(l=>l.trim()).filter(Boolean).map(l=>{
-    const p=l.split('|').map(x=>x.trim());
-    if(p.length<2)return null;
-    let ex=p[2]||'';
-    if(ex && ex.indexOf('___')===-1){
-      const re=new RegExp('\\b'+p[0].replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\b','i');
-      ex=re.test(ex)?ex.replace(re,'___'):ex;
-    }
-    return {w:p[0],tr:p[1],ex:ex,exTr:p[3]||''};
-  }).filter(Boolean);
-}
-function makeCode(){
-  const list=parseLines(document.getElementById('tin').value);
-  if(!list.length){alert('Add at least one line: word | meaning | example sentence');return;}
-  const code=b64e(list);
-  const o=document.getElementById('tout');
-  o.value=code; o.classList.remove('hidden');
-  document.getElementById('tcopy').classList.remove('hidden');
-  document.getElementById('tinfo').textContent=list.length+' words ready. Copy the code and send it to your student.';
-}
-function copyCode(){ copyEl('tout','tcopy','📋 Copy code'); }
-function applyCode(){
-  const v=document.getElementById('sin').value.trim();
-  if(!v)return;
-  let list; try{list=b64d(v)}catch(e){alert('Could not read the code. Make sure you pasted all of it.');return;}
-  if(!Array.isArray(list)){alert('Invalid code.');return;}
-  let added=0;
-  list.forEach(n=>{
-    const ex=S.deck.find(d=>d.w.toLowerCase()===String(n.w).toLowerCase());
-    if(ex){ex.tr=n.tr||ex.tr;ex.ex=n.ex||ex.ex;ex.exTr=n.exTr||ex.exTr;}
-    else{S.deck.push({w:n.w,tr:n.tr||'',ex:n.ex||'',exTr:n.exTr||''});
-         S.words[n.w]={box:0,due:0,seen:0,wrong:0};added++;}
-  });
-  save(); alert(added+' new words added! 🎉 Total: '+S.deck.length);
-  home();
-}
 function resetAll(){
   if(!confirm('This erases ALL progress. Are you sure?'))return;
   localStorage.removeItem(KEY);
@@ -648,41 +590,16 @@ function settingsView(){
   app.innerHTML=`<div class="topbar"><button class="iconbtn" onclick="home()">←</button>
     <div class="brand" style="font-size:17px">Settings</div><div style="width:40px"></div></div>
 
-  <div class="sec-title">📩 New words from my teacher</div>
-  <div class="note">Paste the long code your teacher sent you, then press the button. Your progress is kept.</div>
-  <textarea id="sin" placeholder="WORDS1-..." style="min-height:90px"></textarea>
-  <div style="height:10px"></div>
-  <button class="btn" onclick="applyCode()">Add the words</button>
-
-  <div class="sec-title">💾 Back up your progress</div>
-  <div class="note">Make a backup sometimes, so you do not lose your progress if you change phone or clear your browser. Send the same code to your teacher and they can see which words are hard for you.</div>
+  <div class="sec-title">💾 Moving to a new phone</div>
+  <div class="note">Your words, streak and assignments are stored on this phone. Before you change device or clear your browser, make a backup code and keep it somewhere safe.</div>
   <button class="btn sec" onclick="makeBackup()">Create backup code</button>
   <div class="note" id="binfo"></div>
   <textarea id="bout" class="hidden" readonly style="min-height:80px;font-size:11px"></textarea>
   <button class="btn ghost hidden" id="bcopy" onclick="copyEl('bout','bcopy','📋 Copy backup')">📋 Copy backup</button>
   <div style="height:14px"></div>
-  <textarea id="bin" placeholder="SAVE1-...  (paste here to restore)" style="min-height:80px"></textarea>
+  <textarea id="bin" placeholder="SAVE1-...  (paste your backup here)" style="min-height:80px"></textarea>
   <div style="height:10px"></div>
   <button class="btn ghost" onclick="restoreBackup()">Restore backup</button>
-
-  <div class="sec-title">👩‍🏫 Teacher panel</div>
-  <div class="note">One word per line:<br>
-    <code>word | meaning | example sentence | translation</code><br>
-    Hide the word in the sentence with <code>___</code> (done automatically if you skip it). The last two parts are optional, but the example sentence matters most.</div>
-  <textarea id="tin" placeholder="until | -e kadar | I waited ___ six o'clock. | Saat altıya kadar bekledim.
-borrow | ödünç almak | Can I ___ your pen? | Kalemini ödünç alabilir miyim?"></textarea>
-  <div style="height:10px"></div>
-  <button class="btn sec" onclick="makeCode()">Create code</button>
-  <div class="note" id="tinfo"></div>
-  <textarea id="tout" class="hidden" readonly style="min-height:90px;font-size:11px"></textarea>
-  <button class="btn ghost hidden" id="tcopy" onclick="copyCode()">📋 Copy code</button>
-
-  <div class="sec-title">📊 Student progress report</div>
-  <div class="note">Paste the <code>SAVE1-</code> code your student sent to see where they are stuck, and decide in ten seconds what to review in the lesson.</div>
-  <textarea id="ain" placeholder="SAVE1-..." style="min-height:80px"></textarea>
-  <div style="height:10px"></div>
-  <button class="btn sec" onclick="analyzeStudent()">Show report</button>
-  <div id="aout"></div>
 
   <div class="sec-title">⚠️ Reset</div>
   <button class="btn ghost" onclick="resetAll()" style="color:var(--bad);border-color:var(--bad)">Erase all progress</button>
