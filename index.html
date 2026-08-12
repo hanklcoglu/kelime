@@ -311,7 +311,16 @@ const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',
 function learnedCount(){return S.deck.filter(w=>S.words[w.w].box>=4).length}
 function learningCount(){return S.deck.filter(w=>S.words[w.w].seen>0&&S.words[w.w].box<4).length}
 
+let VIEW='home', SYNC_STATE='idle', SYNC_ERR=false, LAST_SYNC=0;
+function refreshView(){ if(VIEW==='home') home(); else if(VIEW==='tasks') tasksView(); }
+function taskBtnHTML(){
+  const n=tasksOpen().length;
+  const tag = n ? ' \u00b7 '+n : (SYNC_STATE==='checking' ? ' \u00b7 \u2026' : '');
+  return `<button class="btn sec" style="width:100%;margin-bottom:10px" onclick="view('tasks')">${TS.home}${tag}</button>`;
+}
+
 function home(){
+  VIEW='home';
   const {rev,neu}=dueList();
   const pend=Math.min(GOAL,rev.length+neu.length);
   const pct=Math.min(1,S.doneCount/GOAL);
@@ -348,7 +357,7 @@ function home(){
     <div class="stat"><b>${learningCount()}</b><span>learning</span></div>
     <div class="stat"><b>${pend}</b><span>due today</span></div>
   </div>
-  ${taskList().length?`<button class="btn sec" style="width:100%;margin-bottom:10px" onclick="view('tasks')">${TS.home}${tasksOpen().length?' \u00b7 '+tasksOpen().length:''}</button>`:''}
+  ${taskBtnHTML()}
   ${(S.notes&&S.notes.length)?`<button class="btn sec" style="width:100%;margin-bottom:10px" onclick="view('notes')">${NT.home}${notesDue().length?' \u00b7 '+notesDue().length:''}</button>`:''}
   <div class="row">
     <button class="btn sec" onclick="view('list')">📚 My words</button>
@@ -364,6 +373,7 @@ function home(){
 let Q=[],qi=0,answered=false,cur=null,mode='';
 
 function startSession(){
+  VIEW='session';
   Q=buildSession();
   if(!Q.length){alert('Nothing to review right now. Come back tomorrow! 🎉');return;}
   Q=Q.map(w=>({w,intro:S.words[w.w].seen===0}));
@@ -533,6 +543,7 @@ function finish(){
 /* ---------- LIST ---------- */
 function view(v){ if(v==='list')listView(); else if(v==='settings')settingsView(); else if(v==='notes')notesView(); else if(v==='tasks')tasksView(); else home(); }
 function listView(){
+  VIEW='list';
   const items=S.deck.map(w=>{const b=S.words[w.w].box;
     return `<div class="witem"><div><div class="w">${esc(w.w)}</div><div class="t">${esc(w.tr)}</div></div>
       <div class="dots">${[1,2,3,4,5].map(i=>`<div class="dot ${b>=i?'on':''}"></div>`).join('')}</div></div>`}).join('');
@@ -587,6 +598,7 @@ function resetAll(){
   load();home();
 }
 function settingsView(){
+  VIEW='settings';
   app.innerHTML=`<div class="topbar"><button class="iconbtn" onclick="home()">←</button>
     <div class="brand" style="font-size:17px">Settings</div><div style="width:40px"></div></div>
 
@@ -626,6 +638,7 @@ function notesDue(){
   return S.notes.filter(function(n){ return noteState(n.id).due<=d; });
 }
 function notesView(){
+  VIEW='notes';
   const all=S.notes||[], due=notesDue().length, d=dayNum();
   app.innerHTML=`<div class="topbar"><button class="iconbtn" onclick="home()">←</button>
     <div class="brand" style="font-size:17px">${NT.title} (${all.length})</div>
@@ -646,6 +659,7 @@ function startNoteReview(){
   nqi=0; renderNote();
 }
 function renderNote(){
+  VIEW='note';
   if(nqi>=NQ.length){ save(); syncPush(); return notesView(); }
   const n=NQ[nqi], p=Math.round(nqi/NQ.length*100);
   app.innerHTML=`<div class="sesstop"><button class="x" onclick="notesView()">✕</button>
@@ -676,6 +690,12 @@ const TS={title:'Assignments', empty:'No assignments yet. Your teacher will send
   autoNote:function(n){return n+' of these are checked automatically.';},
   writeHere:'Write your answer\u2026',
   confirmBlank:function(n){return n+(n===1?' question is':' questions are')+' still blank. Submit anyway?';},
+  refresh:'\ud83d\udd04 Check for assignments', checking:'Checking\u2026',
+  noKey:"This device isn't linked to your teacher yet. Ask your teacher for your personal link and open it once.",
+  offline:"You're offline. Assignments will arrive once you're connected.",
+  errMsg:"Couldn't reach the server. Try again in a few seconds.",
+  emptyFor:function(){ return SYNC_STATE==='nokey'?TS.noKey : SYNC_STATE==='offline'?TS.offline
+    : SYNC_STATE==='checking'?TS.checking : SYNC_STATE==='err'?TS.errMsg : TS.empty; },
   home:'\ud83d\udcdd Assignments'};
 
 /* ================= assignments: shared parser + scoring ================= */
@@ -819,6 +839,7 @@ function dueInDays(due){
 /* ================= assignments: student UI ================= */
 
 function tasksView(){
+  VIEW='tasks';
   const all = taskList();
   app.innerHTML = `<div class="topbar"><button class="iconbtn" onclick="home()">←</button>
     <div class="brand" style="font-size:17px">${TS.title}</div>
@@ -836,7 +857,9 @@ function tasksView(){
         <div class="ts">${qn} ${TS.questions}${dueTxt ? ' · ' + dueTxt : ''}</div>
         <div class="tstatus ${cls}">${status}</div>
       </div>`;
-    }).join('') : `<div class="hint">${TS.empty}</div>`}`;
+    }).join('') : `<div class="hint">${TS.emptyFor()}</div>`}
+    <div style="height:14px"></div>
+    <button class="btn sec" style="width:100%" onclick="syncNow()">${SYNC_STATE==='checking'?TS.checking:TS.refresh}</button>`;
 }
 
 let curTask = null;
@@ -849,6 +872,7 @@ function openTask(id){
 }
 
 function renderTask(){
+  VIEW='task';
   const t = curTask, st = taskState(t.id), items = parseTask(t.body);
   const done = !!st.submittedAt;
   let qi = 0;
@@ -949,9 +973,11 @@ function syncCfg(){
 let NEW_TASKS=0;
 async function syncPull(){
   const c=syncCfg(); if(!c.key) return 0;
-  NEW_TASKS=0;
-  const r=await fetch(SYNC_API+'?key='+encodeURIComponent(c.key)+'&action=pull&student='+encodeURIComponent(c.student));
-  const d=await r.json(); if(!d||!d.ok) return 0;
+  NEW_TASKS=0; SYNC_ERR=false;
+  const r=await fetch(SYNC_API+'?key='+encodeURIComponent(c.key)+'&action=pull&student='+encodeURIComponent(c.student),{cache:'no-store'});
+  const txt=await r.text();
+  let d=null; try{ d=JSON.parse(txt); }catch(e){}
+  if(!d||!d.ok){ SYNC_ERR=true; return 0; }
   if(!S.notes) S.notes=[];
   let added=0, changed=false;
   (d.items||[]).forEach(function(it){
@@ -1012,23 +1038,44 @@ function syncToast(n){
   setTimeout(function(){ d.remove(); },8000);
 }
 async function syncNow(){
-  if(!navigator.onLine) return;
-  try{
-    const added=await syncPull();
-    if(added>0){ syncToast(added); home(); }
-    if(NEW_TASKS>0){ syncToast2(TS.home); home(); }
-    syncPush();
-  }catch(e){}
+  const c=syncCfg();
+  LAST_SYNC=Date.now();
+  if(!c.key){ SYNC_STATE='nokey'; refreshView(); return; }
+  if(!navigator.onLine){ SYNC_STATE='offline'; refreshView(); return; }
+  SYNC_STATE='checking'; refreshView();
+  let added=0;
+  try{ added=await syncPull(); }catch(e){ SYNC_ERR=true; }
+  if(SYNC_ERR){
+    await new Promise(function(r){ setTimeout(r,1500); });
+    try{ added=await syncPull(); }catch(e){ SYNC_ERR=true; }
+  }
+  SYNC_STATE = SYNC_ERR ? 'err' : 'ok';
+  LAST_SYNC=Date.now();
+  if(added>0) syncToast(added);
+  if(NEW_TASKS>0) syncToast2(TS.home);
+  refreshView();
+  if(!SYNC_ERR) syncPush();
 }
 const NOTES_TITLE='From your teacher';
 
 load(); home(); syncNow();
 
+document.addEventListener('visibilitychange', function(){
+  if(!document.hidden && Date.now()-LAST_SYNC > 30000) syncNow();
+});
+window.addEventListener('online', function(){ syncNow(); });
+
 /* ---- offline support ---- */
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
+    const had=!!navigator.serviceWorker.controller;
+    let reloaded=false;
+    navigator.serviceWorker.addEventListener('controllerchange',()=>{
+      if(!had||reloaded) return; reloaded=true; location.reload();
+    });
     navigator.serviceWorker.register('sw.js').then(reg=>{
-      setInterval(()=>reg.update(), 60*60*1000);
+      reg.update();
+      setInterval(()=>reg.update(), 15*60*1000);
     }).catch(()=>{});
   });
 }
