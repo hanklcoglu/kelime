@@ -367,6 +367,7 @@ function home(){
   </div>
   ${taskBtnHTML()}
   ${(S.notes&&S.notes.length)?`<button class="btn sec" style="width:100%;margin-bottom:10px" onclick="view('notes')">${NT.home}${notesDue().length?' \u00b7 '+notesDue().length:''}</button>`:''}
+  ${pushBtnHTML()}
   <div class="row">
     <button class="btn sec" onclick="view('list')">📚 My words</button>
     <button class="btn sec" onclick="view('settings')">⚙️ Settings</button>
@@ -559,6 +560,7 @@ function listView(){
     <div class="brand" style="font-size:17px">My words (${S.deck.length})</div>
     <button class="iconbtn" onclick="view('settings')">⚙️</button></div>
     <div class="note">Green dots show how strong a word is in your memory. 5 dots = you own it 💪</div>
+    ${pushRowHTML()}
     ${notesHTML()}
     ${items}`;
 }
@@ -978,6 +980,111 @@ function syncCfg(){
   return {key:localStorage.getItem('sync_key'),
           student:localStorage.getItem(SYNC_SLOT)||SYNC_STUDENT_DEFAULT};
 }
+/* ================= push reminders ================= */
+const PUSH_API='https://push.kadirhankilicoglu01.workers.dev';
+const VAPID_PUBLIC='BKCcNge-ndw8Mw1TvFmpXwuqWg4dP1DQwZmB_cKjP6HR1ApE6d1ryJGVjcuxqhi1PvPSZmxbzmqvwFYfhTCt-Ic';
+const PUSH_LANG='en';
+const PT={ title:'Reminders', enable:'\ud83d\udd14 Turn on reminders', working:'Just a moment\u2026', onNow:'\ud83d\udd14 Reminders are on',
+  turnOff:'Turn reminders off', offDesc:'A nudge in the evening if you haven\u2019t practised, and a heads-up when your teacher sends you something.', onDesc:'You\u2019ll hear from the app in the evening, and when your teacher sends you something new.',
+  denied:'Notifications are switched off for this app. You can turn them back on in your phone\u2019s settings.', iosAdd:'On iPhone, reminders only work if the app is opened from your Home Screen. Add it there first, then try again.', failed:'That didn\u2019t work. Try again in a moment.' };
+
+let PUSH_STATE='off';   /* off | on | working | denied | unavailable */
+
+function pushSupported(){
+  return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+}
+/* On iPhone, push only exists for an app opened from the Home Screen. */
+function iosNotInstalled(){
+  const ios = /iP(hone|ad|od)/.test(navigator.userAgent);
+  const standalone = window.navigator.standalone === true ||
+    (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+  return ios && !standalone;
+}
+function pushUsable(){ return pushSupported() && !!syncCfg().key; }
+
+function b64ToBytes(b64){
+  const s = (b64 + '='.repeat((4 - b64.length % 4) % 4)).replace(/-/g,'+').replace(/_/g,'/');
+  const raw = atob(s);
+  const out = new Uint8Array(raw.length);
+  for(let i=0;i<raw.length;i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+async function pushRefresh(){
+  if(!pushUsable()){ PUSH_STATE='unavailable'; return; }
+  if(Notification.permission === 'denied'){ PUSH_STATE='denied'; return; }
+  try{
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    PUSH_STATE = sub ? 'on' : 'off';
+  }catch(e){ PUSH_STATE='off'; }
+}
+
+async function pushEnable(){
+  if(iosNotInstalled()){ alert(PT.iosAdd); return; }
+  PUSH_STATE='working'; refreshView();
+  try{
+    const perm = await Notification.requestPermission();
+    if(perm !== 'granted'){ PUSH_STATE = (perm === 'denied') ? 'denied' : 'off'; refreshView(); return; }
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if(!sub) sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: b64ToBytes(VAPID_PUBLIC)
+    });
+    const c = syncCfg();
+    const r = await fetch(PUSH_API + '/subscribe', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ key:c.key, student:c.student, lang:PUSH_LANG, sub: sub.toJSON() })
+    });
+    const d = await r.json();
+    if(!d || !d.ok) throw new Error('server said no');
+    PUSH_STATE='on';
+  }catch(e){
+    PUSH_STATE = (Notification.permission === 'denied') ? 'denied' : 'off';
+    alert(PT.failed);
+  }
+  refreshView();
+}
+
+async function pushDisable(){
+  PUSH_STATE='working'; refreshView();
+  try{
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if(sub){
+      const c = syncCfg();
+      try{
+        await fetch(PUSH_API + '/unsubscribe', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ key:c.key, student:c.student, endpoint: sub.endpoint })
+        });
+      }catch(e){}
+      await sub.unsubscribe();
+    }
+  }catch(e){}
+  PUSH_STATE='off'; refreshView();
+}
+
+/* Home screen: only offered until they've said yes. */
+function pushBtnHTML(){
+  if(!pushUsable()) return '';
+  if(PUSH_STATE !== 'off' && PUSH_STATE !== 'working') return '';
+  return `<button class="btn sec" style="width:100%;margin-bottom:10px" onclick="pushEnable()">${PUSH_STATE==='working'?PT.working:PT.enable}</button>`;
+}
+
+/* Word list: always there, so it can be switched off again. */
+function pushRowHTML(){
+  if(!pushUsable()) return '';
+  if(PUSH_STATE === 'denied')
+    return `<div class="noteitem"><b>${PT.title}</b>${PT.denied}</div>`;
+  if(PUSH_STATE === 'on')
+    return `<div class="noteitem"><b>${PT.title} \u00b7 ${PT.onNow}</b>${PT.onDesc}<br><br>
+      <button class="btn sec" style="width:auto;padding:9px 16px;font-size:14px" onclick="pushDisable()">${PT.turnOff}</button></div>`;
+  return `<div class="noteitem"><b>${PT.title}</b>${PT.offDesc}<br><br>
+    <button class="btn sec" style="width:auto;padding:9px 16px;font-size:14px" onclick="pushEnable()">${PUSH_STATE==='working'?PT.working:PT.enable}</button></div>`;
+}
+
 let NEW_TASKS=0;
 async function syncPull(){
   const c=syncCfg(); if(!c.key) return 0;
@@ -1074,6 +1181,15 @@ async function syncNow(){
 const NOTES_TITLE='From your teacher';
 
 load(); home(); syncNow();
+
+/* opened by tapping a notification */
+if(location.hash === '#tasks' || location.hash === '#notes'){
+  const want = location.hash.slice(1);
+  history.replaceState(null, '', location.pathname);
+  setTimeout(function(){ view(want); }, 0);
+}
+
+pushRefresh().then(refreshView);
 
 document.addEventListener('visibilitychange', function(){
   if(document.hidden) return;
